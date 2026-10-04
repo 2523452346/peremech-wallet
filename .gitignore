@@ -1,0 +1,10 @@
+node_modules/
+build/desktop/
+build/wallet/
+build/anonbox-wallet.js
+build/anonbox-send.js
+desktop/web/anonbox-wallet.js
+desktop/web/defaults.json
+desktop/web/withdraw.wasm
+desktop/web/withdraw.zkey
+*-gas-key.txt

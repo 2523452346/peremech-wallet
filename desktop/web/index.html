@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>peremech wallet</title>
+<!--
+  Страница программы «Кошелёк peremech без сайта». Её отдаёт сама программа
+  с этого компьютера (127.0.0.1). Ключи берутся из файлов и не покидают компьютер;
+  ящики и балансы читаются прямо из сети Tempo.
+-->
+<style>
+  :root { --bg:#1F2227; --card:#1b1d22; --text:#8F9093; --bright:#e5e7eb; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:28px 16px; background:var(--bg); color:var(--text);
+         font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  .card { max-width:760px; margin:0 auto 18px; background:var(--card); border-radius:12px; padding:18px 20px; }
+  h1 { font-size:16px; color:var(--bright); margin:0 0 6px; }
+  h2 { font-size:14px; color:var(--bright); margin:0 0 8px; }
+  label { display:block; font-size:12px; margin:10px 0 4px; }
+  input[type=text], input[type=password] { width:100%; padding:8px 10px; background:#2a2e35; color:var(--bright); border:0; border-radius:6px;
+                     font:13px Consolas,monospace; }
+  button, .btn { display:inline-block; margin:10px 8px 0 0; padding:9px 16px; border:0; border-radius:8px; background:#8f9093;
+                 color:#000; font-weight:600; font-size:13px; cursor:pointer; }
+  button.ghost { background:#2a2e35; color:var(--bright); }
+  button[disabled] { opacity:.5; cursor:default; }
+  .row { margin-top:6px; padding:8px 10px; background:#22252b; border-radius:6px; color:var(--bright); word-break:break-word; }
+  .mono { font-family:Consolas,monospace; color:var(--bright); word-break:break-all; }
+  .muted { color:#6b7280; }
+  .msg { margin-top:10px; min-height:18px; }
+  .msg.bad { color:#f87171; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>peremech wallet</h1>
+  <div>Get your money out without the peremech website. Your keys never leave this computer.</div>
+</div>
+
+<div class="card">
+  <h2>1. Fee wallet</h2>
+  <div>Every withdrawal costs a network fee — a fraction of a cent in USDT0. This wallet pays it. Your money does not go here.</div>
+  <div id="gas-none">
+    <button type="button" id="gas-create">Create a new fee wallet</button>
+    <button type="button" class="ghost" id="gas-own">Use my own wallet</button>
+    <div id="gas-import" class="hidden">
+      <label>Private key of a Tempo wallet that has a few cents of USDT0</label>
+      <input type="password" id="gas-key" placeholder="0x..." autocomplete="off">
+      <button type="button" id="gas-save">Use this wallet</button>
+    </div>
+    <div id="gas-cancel-wrap" class="hidden">
+      <button type="button" class="ghost" id="gas-cancel">Cancel</button>
+    </div>
+  </div>
+  <div id="gas-ready" class="hidden">
+    <div class="row"><span class="mono" id="gas-address"></span><br><span class="muted">Balance: <span id="gas-balance">…</span> — top it up with a few cents of USDT0 on Tempo before withdrawing.</span></div>
+    <button type="button" class="ghost" id="gas-refresh">Refresh balance</button>
+    <button type="button" class="ghost" id="gas-change">Change</button>
+  </div>
+  <div class="msg" id="gas-msg"></div>
+</div>
+
+<div class="card">
+  <h2>2. Wallet</h2>
+  <div>Your regular balance. Open it with the backup key file you downloaded when setting up your wallet on peremech (private_key_peremech.txt).</div>
+  <label class="btn" for="wallet-file">Choose backup key file</label>
+  <input type="file" id="wallet-file" accept=".txt,text/plain" style="display:none">
+  <div id="wallet-open" class="hidden">
+    <div class="row">Balance: <span id="wallet-balance"></span></div>
+    <label>Send to (Tempo address)</label>
+    <input type="text" id="wallet-to" placeholder="0x...">
+    <label>Amount, USD</label>
+    <input type="text" id="wallet-amount" placeholder="1.00">
+    <button type="button" id="wallet-send">Withdraw</button>
+  </div>
+  <div class="msg" id="wallet-msg"></div>
+</div>
+
+<div class="card">
+  <h2>3. Anonymous box</h2>
+  <div>Your anonymous donations. Open them with the box key file (peremech_anonymous_box_key.json).</div>
+  <label class="btn" for="keyfile">Choose box key file</label>
+  <input type="file" id="keyfile" accept=".json,application/json" style="display:none">
+  <div id="summary" class="row hidden"></div>
+  <div id="list"></div>
+  <div id="box-open" class="hidden">
+    <label>Send the money to (Tempo address)</label>
+    <input type="text" id="to" placeholder="0x...">
+    <button type="button" id="withdraw" disabled>Withdraw all</button>
+  </div>
+  <div class="msg" id="msg"></div>
+</div>
+
+<script src="anonbox-wallet.js"></script>
+<script>
+(function(){
+  const ZERO_SEED = '0x66a301a7bff6bd01fa5db132f4f20f336544866126c0036f53597c139a437f1d';
+  // withdraw(uint256[2],uint256[2][2],uint256[2],uint256,uint256[4],address,address,uint256)
+  const WITHDRAW_SELECTOR = 'e1cdab94';
+  const W = window.AnonBoxWallet;
+  const $ = (id) => document.getElementById(id);
+  let cfg = null, keys = null, boxes = [];
+
+  function say(id, t, bad){ $(id).textContent = t || ''; $(id).className = 'msg' + (bad ? ' bad' : ''); }
+  function show(id, on){ $(id).classList.toggle('hidden', !on); }
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+  const usd = (u) => '$' + (Number(u) / 1e6).toFixed(2);
+  async function post(url, body){
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'failed');
+    return data;
+  }
+
+  // ----- 1. Кошелёк для газа -----
+  async function gas(){
+    try {
+      const g = await fetch('/api/gas').then(r => r.json());
+      show('gas-none', !g.configured);
+      show('gas-ready', !!g.configured);
+      if (g.configured) show('gas-cancel-wrap', false);
+      if (g.configured) {
+        $('gas-address').textContent = g.address;
+        $('gas-balance').textContent = g.balance === '?' ? '?' : usd(g.balance);
+      }
+    } catch (_e) {}
+  }
+  $('gas-create').addEventListener('click', async () => {
+    try { await post('/api/gas/create'); say('gas-msg', 'Created. Put a few cents of USDT0 on the Tempo network to this address.'); await gas(); }
+    catch (e) { say('gas-msg', e.message, true); }
+  });
+  $('gas-own').addEventListener('click', () => show('gas-import', true));
+  $('gas-save').addEventListener('click', async () => {
+    try { await post('/api/gas/import', { key: $('gas-key').value }); $('gas-key').value = ''; show('gas-import', false); say('gas-msg', ''); await gas(); }
+    catch (e) { say('gas-msg', e.message, true); }
+  });
+  $('gas-change').addEventListener('click', () => { show('gas-ready', false); show('gas-none', true); show('gas-cancel-wrap', true); });
+  $('gas-cancel').addEventListener('click', () => { show('gas-import', false); show('gas-cancel-wrap', false); say('gas-msg', ''); gas(); });
+  $('gas-refresh').addEventListener('click', () => gas());
+
+  // ----- 2. Обычный кошелёк -----
+  $('wallet-file').addEventListener('change', async () => {
+    const f = $('wallet-file').files[0];
+    $('wallet-file').value = '';
+    if (!f) return;
+    try {
+      const t = await f.text();
+      const pick = (re) => { const m = t.match(re); return m ? m[1] : ''; };
+      const body = {
+        private_key: pick(/(0x[0-9a-fA-F]{64})\s*\r?\n/),
+        user: pick(/user\s*=\s*(0x[0-9a-fA-F]{64})/),
+        custody: pick(/Контракт с деньгами:\s*(0x[0-9a-fA-F]{40})/),
+      };
+      const d = await post('/api/wallet/open', body);
+      $('wallet-balance').textContent = usd(d.balance);
+      show('wallet-open', true);
+      say('wallet-msg', '');
+    } catch (e) { show('wallet-open', false); say('wallet-msg', e.message, true); }
+  });
+  $('wallet-send').addEventListener('click', async () => {
+    const to = $('wallet-to').value.trim();
+    const n = Number(String($('wallet-amount').value).replace(',', '.'));
+    if (!/^0x[0-9a-fA-F]{40}$/.test(to)) { say('wallet-msg', 'Enter a Tempo address 0x…', true); return; }
+    if (!(n > 0)) { say('wallet-msg', 'Enter the amount.', true); return; }
+    $('wallet-send').disabled = true;
+    say('wallet-msg', 'Sending…');
+    try {
+      await post('/api/wallet/withdraw', { to, amount: String(Math.round(n * 1e6)) });
+      say('wallet-msg', 'Withdrawn to ' + to + '.');
+      $('wallet-file').value = '';
+      gas();
+    } catch (e) { say('wallet-msg', e.message, true); }
+    finally { $('wallet-send').disabled = false; }
+  });
+
+  // ----- 3. Анонимный ящик -----
+  async function scan(){
+    const from = Number(cfg.from) || 0;
+    show('summary', true);
+    $('summary').textContent = 'Reading the boxes…';
+    const clock = await W.blockClock(cfg.rpc, from);
+    boxes = [];
+    for (const [denom, address] of [[10, cfg.box10], [100, cfg.box100]]) {
+      if (!/^0x[0-9a-fA-F]{40}$/.test(address || '') || /^0x0+$/.test(address)) continue;
+      const [{ deposits }, spent] = await Promise.all([W.scanBox(cfg.rpc, address, from), W.scanSpent(cfg.rpc, address, from)]);
+      const notes = [], seen = new Set();
+      for (const d of deposits) {
+        const key = d.commitment.toString();
+        if (seen.has(key)) continue;
+        const got = await W.open(keys, d.commitment, d.envelope);
+        if (!got) continue;
+        seen.add(key);
+        notes.push({ index: d.index, commitment: d.commitment, blinding: got.blinding, name: got.name, text: got.text,
+                     time: clock(d.block), taken: spent.has(W.nullifierOf(keys.secret, d.commitment).toString()) });
+      }
+      boxes.push({ address, deposits, notes, value: denom * 950000 });
+    }
+    let free = 0, all = [];
+    boxes.forEach(b => b.notes.forEach(n => { all.push({ n, value: b.value }); if (!n.taken) free += b.value; }));
+    all.sort((x, y) => y.n.time - x.n.time);
+    $('summary').textContent = 'Available: ' + usd(free);
+    $('list').innerHTML = all.map(x => '<div class="row">' + usd(x.value) + ' — <b>' + (x.n.name ? esc(x.n.name) : 'Anonymous') + '</b>' +
+      (x.n.text ? ': ' + esc(x.n.text) : '') + ' <span class="muted">· ' + esc(x.n.time.toLocaleString()) + (x.n.taken ? ' · withdrawn' : '') + '</span></div>').join('');
+    show('box-open', true);
+    $('withdraw').disabled = free === 0;
+  }
+
+  $('keyfile').addEventListener('change', async () => {
+    const f = $('keyfile').files[0];
+    $('keyfile').value = '';
+    if (!f) return;
+    try {
+      const parsed = JSON.parse(await f.text());
+      keys = parsed.key || parsed;
+      if (!keys.secret || !keys.view) throw new Error('this is not a box key file');
+      await scan();
+      say('msg', '');
+    } catch (e) {
+      keys = null;
+      show('box-open', false);
+      say('msg', 'Could not read: ' + (e.message || e), true);
+    }
+  });
+
+  function word(v){ return BigInt(v).toString(16).padStart(64, '0'); }
+  function calldata(p, recipient){
+    // Отправляет сама программа: доставщика и платы нет.
+    const nums = [...p.a, ...p.b[0], ...p.b[1], ...p.c, p.root, ...p.nullifiers, BigInt(recipient), 0n, 0n];
+    return '0x' + WITHDRAW_SELECTOR + nums.map(word).join('');
+  }
+
+  $('withdraw').addEventListener('click', async () => {
+    const to = $('to').value.trim();
+    if (!/^0x[0-9a-fA-F]{40}$/.test(to)) { say('msg', 'Enter a Tempo address 0x…', true); return; }
+    $('withdraw').disabled = true;
+    try {
+      await scan();
+      let done = 0;
+      for (const b of boxes) {
+        const free = b.notes.filter(n => !n.taken);
+        const tree = new W.Tree(W.zeroLeaf(ZERO_SEED), b.deposits.map(d => d.commitment));
+        for (let i = 0; i < free.length; i += 4) {
+          say('msg', 'Preparing the withdrawal… (' + (done + 1) + ')');
+          const p = await W.prove({ keys, notes: free.slice(i, i + 4), tree, recipient: to,
+            relayer: '0x0000000000000000000000000000000000000000', fee: 0n, wasm: 'withdraw.wasm', zkey: 'withdraw.zkey' });
+          say('msg', 'Sending the withdrawal… (' + (done + 1) + ')');
+          await post('/api/send', { to: b.address, data: calldata(p, to) });
+          done++;
+        }
+      }
+      await scan();
+      gas();
+      say('msg', done ? 'Withdrawn to ' + to + '.' : 'Nothing to withdraw.');
+    } catch (e) {
+      say('msg', 'Failed: ' + (e.message || e), true);
+    } finally {
+      $('withdraw').disabled = false;
+    }
+  });
+
+  fetch('defaults.json').then(r => r.json()).then(c => { cfg = c; }).catch(() => say('msg', 'Settings are missing in this program.', true));
+  gas();
+})();
+</script>
+</body>
+</html>

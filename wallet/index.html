@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anonymous box wallet</title>
+<!--
+  Кошелёк анонимного ящика без сайта peremech.
+
+  Нужен на случай, если сайта больше нет. Всё работает здесь, в браузере:
+  ключ ящика берётся из файла, ящики читаются прямо из сети Tempo через любой
+  открытый узел, доказательство вывода считается на этом устройстве, а вывод
+  отправляет твой собственный кошелёк (MetaMask и подобные) — он же платит газ.
+  Ни одного обращения к peremech.com здесь нет.
+
+  Рядом с этой страницей должны лежать anonbox-wallet.js, withdraw.wasm и
+  withdraw.zkey. Если страница открыта файлом и браузер не даёт их прочитать,
+  она попросит выбрать два последних вручную.
+-->
+<style>
+  :root { --bg:#1F2227; --card:#1b1d22; --line:#2A2E35; --text:#8F9093; --bright:#e5e7eb; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:28px 16px; background:var(--bg); color:var(--text);
+         font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  .card { max-width:760px; margin:0 auto 18px; background:var(--card); border-radius:12px; padding:18px 20px; }
+  h1 { font-size:16px; color:var(--bright); margin:0 0 6px; }
+  h2 { font-size:14px; color:var(--text); margin:0 0 10px; }
+  label { display:block; font-size:12px; margin:8px 0 4px; }
+  input[type=text] { width:100%; padding:8px 10px; background:#2a2e35; color:var(--bright); border:0; border-radius:6px;
+                     font:13px Consolas,monospace; }
+  button, .btn { display:inline-block; margin-top:10px; padding:9px 16px; border:0; border-radius:8px; background:#8f9093;
+                 color:#000; font-weight:600; font-size:13px; cursor:pointer; }
+  button[disabled] { opacity:.5; cursor:default; }
+  .row { margin-top:6px; padding:8px 10px; background:#22252b; border-radius:6px; color:var(--bright); word-break:break-word; }
+  .muted { color:#6b7280; }
+  #msg { margin-top:10px; min-height:18px; }
+  #msg.bad { color:#f87171; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Anonymous box wallet</h1>
+  <div>Read and withdraw your anonymous donations without the peremech website. Your key never leaves this page.</div>
+</div>
+
+<div class="card">
+  <h2>1. Network</h2>
+  <label>Tempo RPC (any public node)</label>
+  <input type="text" id="rpc" value="https://rpc.tempo.xyz">
+  <label>Box $10</label>
+  <input type="text" id="box10" value="">
+  <label>Box $100</label>
+  <input type="text" id="box100" value="">
+  <label>Start block</label>
+  <input type="text" id="from" value="0">
+</div>
+
+<div class="card">
+  <h2>2. Key</h2>
+  <label class="btn" for="keyfile">Choose key file</label>
+  <input type="file" id="keyfile" accept=".json,application/json" style="display:none">
+  <div id="summary" class="row" style="display:none"></div>
+  <div id="list"></div>
+</div>
+
+<div class="card">
+  <h2>3. Withdraw</h2>
+  <div>Your own wallet (MetaMask or similar) sends the withdrawal and pays the network fee — a fraction of a cent.</div>
+  <label>Send the money to (Tempo address)</label>
+  <input type="text" id="to" placeholder="0x...">
+  <button type="button" id="withdraw" disabled>Connect wallet and withdraw all</button>
+  <div id="msg"></div>
+</div>
+
+<!-- defaults.js кладётся при сборке пакета: адреса ящиков и блок начала. -->
+<script src="defaults.js"></script>
+<script src="anonbox-wallet.js"></script>
+<script>
+(function(){
+  // Адреса ящиков и блок начала — заполняются при сборке пакета; их можно поправить руками.
+  const DEFAULTS = window.ANONBOX_DEFAULTS || {};
+  for (const k of ['rpc', 'box10', 'box100', 'from']) if (DEFAULTS[k] !== undefined) document.getElementById(k).value = DEFAULTS[k];
+
+  const ZERO_SEED = '0x66a301a7bff6bd01fa5db132f4f20f336544866126c0036f53597c139a437f1d';
+  // withdraw(uint256[2],uint256[2][2],uint256[2],uint256,uint256[4],address,address,uint256)
+  const WITHDRAW_SELECTOR = 'e1cdab94';
+  const W = window.AnonBoxWallet;
+  const $ = (id) => document.getElementById(id);
+  let keys = null, boxes = [], circuit = null;
+
+  function say(t, bad){ $('msg').textContent = t || ''; $('msg').className = bad ? 'bad' : ''; }
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+  const usd = (u) => '$' + (Number(u) / 1e6).toFixed(2);
+
+  async function scan(){
+    const rpc = $('rpc').value.trim(), from = Number($('from').value) || 0;
+    $('summary').style.display = 'block';
+    $('summary').textContent = 'Reading the boxes…';
+    const clock = await W.blockClock(rpc, from);
+    boxes = [];
+    for (const [denom, id] of [[10, 'box10'], [100, 'box100']]) {
+      const address = $(id).value.trim();
+      if (!/^0x[0-9a-fA-F]{40}$/.test(address)) continue;
+      const [{ deposits }, spent] = await Promise.all([W.scanBox(rpc, address, from), W.scanSpent(rpc, address, from)]);
+      const notes = [], seen = new Set();
+      for (const d of deposits) {
+        const key = d.commitment.toString();
+        if (seen.has(key)) continue;
+        const got = await W.open(keys, d.commitment, d.envelope);
+        if (!got) continue;
+        seen.add(key);
+        notes.push({ index: d.index, commitment: d.commitment, blinding: got.blinding, name: got.name, text: got.text,
+                     time: clock(d.block), taken: spent.has(W.nullifierOf(keys.secret, d.commitment).toString()) });
+      }
+      boxes.push({ address, deposits, notes, value: denom * 950000 });
+    }
+    let free = 0, all = [];
+    boxes.forEach(b => b.notes.forEach(n => { all.push({ n, value: b.value }); if (!n.taken) free += b.value; }));
+    all.sort((x, y) => y.n.time - x.n.time);
+    $('summary').textContent = all.length ? 'Available: ' + usd(free) + ' · envelopes: ' + all.length : 'No donations found.';
+    $('list').innerHTML = all.map(x => '<div class="row">' + usd(x.value) + ' — <b>' + (x.n.name ? esc(x.n.name) : 'Anonymous') + '</b>' +
+      (x.n.text ? ': ' + esc(x.n.text) : '') + ' <span class="muted">· ' + esc(x.n.time.toLocaleString()) + (x.n.taken ? ' · withdrawn' : '') + '</span></div>').join('');
+    $('withdraw').disabled = free === 0;
+  }
+
+  $('keyfile').addEventListener('change', async () => {
+    const f = $('keyfile').files[0];
+    $('keyfile').value = '';
+    if (!f) return;
+    try {
+      const parsed = JSON.parse(await f.text());
+      keys = parsed.key || parsed;
+      if (!keys.secret || !keys.view) throw new Error('bad file');
+      await scan();
+    } catch (e) {
+      keys = null;
+      $('summary').style.display = 'block';
+      $('summary').textContent = 'Could not read: ' + (e.message || e);
+    }
+  });
+
+  // Файлы схемы: рядом со страницей, а если браузер не даёт их прочитать — выбрать руками.
+  async function loadCircuit(){
+    if (circuit) return circuit;
+    try {
+      const [wasm, zkey] = await Promise.all(['withdraw.wasm', 'withdraw.zkey'].map(async (n) => {
+        const r = await fetch(n); if (!r.ok) throw new Error(n);
+        return { type: 'mem', data: new Uint8Array(await r.arrayBuffer()) };
+      }));
+      return (circuit = { wasm, zkey });
+    } catch (_e) {
+      say('Choose withdraw.wasm and withdraw.zkey (they come with this page).');
+      const pick = () => new Promise((resolve) => {
+        const i = document.createElement('input'); i.type = 'file'; i.multiple = true;
+        i.onchange = () => resolve(Array.from(i.files)); i.click();
+      });
+      const files = await pick();
+      const get = async (ext) => { const f = files.find(x => x.name.endsWith(ext)); if (!f) throw new Error('missing ' + ext); return { type: 'mem', data: new Uint8Array(await f.arrayBuffer()) }; };
+      return (circuit = { wasm: await get('.wasm'), zkey: await get('.zkey') });
+    }
+  }
+
+  function word(v){ return BigInt(v).toString(16).padStart(64, '0'); }
+  function calldata(p, recipient){
+    const nums = [...p.a, ...p.b[0], ...p.b[1], ...p.c, p.root, ...p.nullifiers, BigInt(recipient), 0n, 0n];
+    return '0x' + WITHDRAW_SELECTOR + nums.map(word).join('');
+  }
+
+  $('withdraw').addEventListener('click', async () => {
+    const to = $('to').value.trim();
+    if (!/^0x[0-9a-fA-F]{40}$/.test(to)) { say('Enter a Tempo address 0x…', true); return; }
+    if (!window.ethereum) { say('No browser wallet found. Install MetaMask and add the Tempo network.', true); return; }
+    $('withdraw').disabled = true;
+    try {
+      const [from] = await window.ethereum.request({ method: 'eth_requestAccounts' });
+      const c = await loadCircuit();
+      await scan();
+      let done = 0;
+      for (const b of boxes) {
+        const free = b.notes.filter(n => !n.taken);
+        const tree = new W.Tree(W.zeroLeaf(ZERO_SEED), b.deposits.map(d => d.commitment));
+        for (let i = 0; i < free.length; i += 4) {
+          say('Preparing the withdrawal… (' + (done + 1) + ')');
+          // Без доставщика: отправляет сам владелец, плата доставщику — ноль.
+          const p = await W.prove({ keys, notes: free.slice(i, i + 4), tree, recipient: to, relayer: '0x0000000000000000000000000000000000000000', fee: 0n, wasm: c.wasm, zkey: c.zkey });
+          say('Confirm the transaction in your wallet… (' + (done + 1) + ')');
+          await window.ethereum.request({ method: 'eth_sendTransaction', params: [{ from, to: b.address, data: calldata(p, to) }] });
+          done++;
+        }
+      }
+      say(done ? 'Sent. Refresh in a minute to see the envelopes marked as withdrawn.' : 'Nothing to withdraw.');
+    } catch (e) {
+      say('Failed: ' + (e && (e.message || e)), true);
+    } finally {
+      $('withdraw').disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>

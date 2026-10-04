@@ -1,0 +1,17 @@
+{
+  "name": "peremech-wallet",
+  "private": true,
+  "description": "peremech wallet: withdraw your money without the website",
+  "type": "module",
+  "dependencies": {
+    "circomlib": "^2.0.5",
+    "esbuild": "^0.25.10",
+    "poseidon-lite": "^0.3.0",
+    "poseidon-solidity": "^0.0.5",
+    "snarkjs": "^0.7.5"
+  },
+  "scripts": {
+    "build:js": "esbuild web/wallet.js --bundle --minify --format=iife --platform=browser --outfile=build/anonbox-wallet.js && esbuild web/send.js --bundle --minify --format=iife --platform=browser --outfile=build/anonbox-send.js",
+    "build:wallet": "node build-wallet.mjs"
+  }
+}
