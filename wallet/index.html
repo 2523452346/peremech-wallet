@@ -58,7 +58,7 @@
 <div class="card">
   <h2>2. Key</h2>
   <label class="btn" for="keyfile">Choose key file</label>
-  <input type="file" id="keyfile" accept=".json,application/json" style="display:none">
+  <input type="file" id="keyfile" accept=".txt,text/plain" style="display:none">
   <div id="summary" class="row" style="display:none"></div>
   <div id="list"></div>
 </div>
@@ -123,14 +123,21 @@
     $('withdraw').disabled = free === 0;
   }
 
+  // Файл ключа ящика (.txt): строки «secret: …» и «view key: d.x.y» — части ключа P-256 в base64url.
+  function parseBoxKeyFile(text){
+      const s = /secret:\s*(\d+)/.exec(text);
+      const v = /view key:\s*([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)/.exec(text);
+      if(!s || !v) return null;
+      return { v: 1, secret: s[1], view: { kty: 'EC', crv: 'P-256', d: v[1], x: v[2], y: v[3], ext: true, key_ops: ['deriveBits'] } };
+  }
+
   $('keyfile').addEventListener('change', async () => {
     const f = $('keyfile').files[0];
     $('keyfile').value = '';
     if (!f) return;
     try {
-      const parsed = JSON.parse(await f.text());
-      keys = parsed.key || parsed;
-      if (!keys.secret || !keys.view) throw new Error('bad file');
+      keys = parseBoxKeyFile(await f.text());
+      if (!keys) throw new Error('bad file');
       await scan();
     } catch (e) {
       keys = null;
