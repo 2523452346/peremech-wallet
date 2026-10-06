@@ -18,8 +18,8 @@ It opens a page in your browser that only you can see (it listens on 127.0.0.1).
    an amount. The withdrawal is signed by your backup key (`withdrawByRecovery` in the
    custody contract); the fee wallet pays the network fee as Tempo fee payer, so the
    backup key itself needs no funds.
-3. **Anonymous box.** Anonymous donations. Open your box key file, the program finds
-   your envelopes on chain and withdraws them with a zero-knowledge proof (Groth16,
+3. **Anonymous box.** Anonymous donations. Open your box key file, the program reads
+   the envelopes straight from the box contract (it keeps every envelope, numbered) and withdraws them with a zero-knowledge proof (Groth16,
    up to 4 envelopes per proof). Nobody, including peremech, can link the sender's
    wallet to yours directly.
 
@@ -32,7 +32,7 @@ The anonymous box contracts on Tempo mainnet are a **trial deployment**:
 
 - box $10: `0xb107cD1A07ACbd967cd412b1172519F498Dac9bB`
 - box $100: `0x7f004788283b57331E7911578AF0e576a3c5286D`
-- first block: `42327696`
+- first block: `42933827`
 
 The proving key (`build/withdraw.zkey`) comes from a single-contributor setup. Before the
 real launch there will be a multi-party ceremony, new box contracts and an external audit.
@@ -57,7 +57,7 @@ You need Go 1.27+ and Node.js 20+.
 npm install
 npm run build:js
 cd desktop
-BOX10=0xb107cD1A07ACbd967cd412b1172519F498Dac9bB BOX100=0x7f004788283b57331E7911578AF0e576a3c5286D FROM=42327696 node build.mjs
+BOX10=0x1Cd288eB65A086E5743dd3E1516735DD2D5a3A12 BOX100=0x838e4eB98D259B63C74F0f13BC411D62705783eA FROM=42933827 node build.mjs
 ```
 
 The programs appear in `build/desktop/`.

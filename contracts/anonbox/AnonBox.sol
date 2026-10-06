@@ -41,6 +41,10 @@ interface IAnonBoxVerifier {
 ///
 /// There is no owner and no admin: nothing can be paused, changed, frozen or taken out
 /// other than by a valid proof. The platform wallet only receives its fee on deposit.
+///
+/// Every envelope also stays inside the box, numbered: a recipient reads them straight
+/// from here ("how many?" → "give me #from..#to") instead of scanning the whole chain
+/// history for Deposit events, which gets slower every day.
 contract AnonBox {
     uint256 public constant FIELD =
         21888242871839275222246405745257275088548364400416034343698204186575808495617;
@@ -66,6 +70,15 @@ contract AnonBox {
     uint32 public nextIndex;
 
     mapping(uint256 => bool) public spent;
+
+    /// Envelope #i: its commitment, when it arrived and the sealed letter.
+    uint256[] internal noteCommitments;
+    uint64[] internal noteTimes;
+    bytes[] internal noteEnvelopes;
+    /// Every nullifier ever taken, in order. A recipient reads the whole list instead of
+    /// asking about their own nullifiers — such a question would tell the node which
+    /// envelopes are theirs.
+    uint256[] internal spentList;
 
     event Deposit(uint256 indexed commitment, uint32 leafIndex, bytes envelope);
     event Withdrawal(address indexed recipient, address indexed relayer, uint256 amount, uint256 fee, uint256[4] nullifiers);
@@ -120,6 +133,9 @@ contract AnonBox {
         require(token.transfer(platformWallet, fee), "fee failed");
 
         uint32 index = _insert(commitment);
+        noteCommitments.push(commitment);
+        noteTimes.push(uint64(block.timestamp));
+        noteEnvelopes.push(envelope);
         emit Deposit(commitment, index, envelope);
     }
 
@@ -167,6 +183,7 @@ contract AnonBox {
             require(n < FIELD, "bad nullifier");
             require(!spent[n], "already taken");
             spent[n] = true;
+            spentList.push(n);
             count++;
         }
         require(count > 0, "nothing to take");
@@ -213,6 +230,44 @@ contract AnonBox {
         currentRootIndex = next;
         roots[next] = cur;
         nextIndex = index + 1;
+    }
+
+    // ---------------------------------------------------------------- reading
+
+    /// Envelopes #from .. #from+count-1 (fewer if the box has fewer). How many there are
+    /// in total is `nextIndex`.
+    function notes(uint256 from, uint256 count)
+        external
+        view
+        returns (uint256[] memory commitments, uint64[] memory times, bytes[] memory envelopes)
+    {
+        uint256 total = noteCommitments.length;
+        if (from > total) from = total;
+        if (count > total - from) count = total - from;
+        commitments = new uint256[](count);
+        times = new uint64[](count);
+        envelopes = new bytes[](count);
+        for (uint256 i = 0; i < count; i++) {
+            commitments[i] = noteCommitments[from + i];
+            times[i] = noteTimes[from + i];
+            envelopes[i] = noteEnvelopes[from + i];
+        }
+    }
+
+    /// How many nullifiers have been taken in total.
+    function spentCount() external view returns (uint256) {
+        return spentList.length;
+    }
+
+    /// Taken nullifiers #from .. #from+count-1 (fewer if there are fewer).
+    function spentFrom(uint256 from, uint256 count) external view returns (uint256[] memory list) {
+        uint256 total = spentList.length;
+        if (from > total) from = total;
+        if (count > total - from) count = total - from;
+        list = new uint256[](count);
+        for (uint256 i = 0; i < count; i++) {
+            list[i] = spentList[from + i];
+        }
     }
 
     /// A proof may be built against a slightly older root: new envelopes keep arriving
