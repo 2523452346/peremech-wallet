@@ -26,17 +26,16 @@ It opens a page in your browser that only you can see (it listens on 127.0.0.1).
 Only you sign your transactions. peremech cannot move your money and cannot stop you
 from withdrawing it.
 
-## Status: trial
+## Anonymous box contracts (Tempo mainnet)
 
-The anonymous box contracts on Tempo mainnet are a **trial deployment**:
-
-- box $10: `0xb107cD1A07ACbd967cd412b1172519F498Dac9bB`
-- box $100: `0x7f004788283b57331E7911578AF0e576a3c5286D`
+- box $10: `0x1Cd288eB65A086E5743dd3E1516735DD2D5a3A12`
+- box $100: `0x838e4eB98D259B63C74F0f13BC411D62705783eA`
 - first block: `42933827`
 
-The proving key (`build/withdraw.zkey`) comes from a single-contributor setup. Before the
-real launch there will be a multi-party ceremony, new box contracts and an external audit.
-Do not treat the trial boxes as final.
+Each box keeps every envelope (numbered) and the list of taken nullifiers inside the contract,
+so the program reads them in one or two calls instead of scanning the chain history.
+
+The proving key (`build/withdraw.zkey`) comes from a single-contributor setup.
 
 ## Layout
 
